@@ -1,111 +1,124 @@
 """
 app.py
 ======
-Streamlit app untuk deployment model Credit_Score (bagian 1c).
+Streamlit deployment for the Credit_Score classification model
+(Model Deployment, Dataset A).
 
-Menu:
-  1. Prediksi Manual  -> isi form data 1 nasabah, lihat prediksi + probabilitas
-  2. Prediksi Batch    -> upload CSV berisi banyak nasabah, download hasil
+Loads the artifacts produced by pipeline.py:
+    - credit_score_model.pkl   (best trained model)
+    - preprocessor.pkl         (fitted ColumnTransformer)
+    - label_encoder.pkl        (target LabelEncoder)
+    - feature_schema.pkl       (numeric_cols / categorical_cols used at fit time)
 
-Jalankan dengan:
+Run locally with:
     streamlit run app.py
+
+Deploy on Streamlit Community Cloud by pointing it at this repo + this file.
 """
 
-import streamlit as st
+import joblib
+import numpy as np
 import pandas as pd
+import streamlit as st
 
-from predict import CreditScorePredictor
-
-st.set_page_config(page_title="Credit Score Predictor", page_icon="💳", layout="centered")
-
-ARTIFACTS_DIR = "."
+st.set_page_config(page_title="Credit Score Prediction", page_icon="💳", layout="centered")
 
 
 @st.cache_resource
-def load_predictor():
-    return CreditScorePredictor(artifacts_dir=ARTIFACTS_DIR)
+def load_artifacts():
+    model = joblib.load("credit_score_model.pkl")
+    preprocessor = joblib.load("preprocessor.pkl")
+    label_encoder = joblib.load("label_encoder.pkl")
+    schema = joblib.load("feature_schema.pkl")
+    return model, preprocessor, label_encoder, schema
 
 
-predictor = load_predictor()
+model, preprocessor, label_encoder, schema = load_artifacts()
+NUMERIC_COLS = schema["numeric_cols"]
+CATEGORICAL_COLS = schema["categorical_cols"]
 
-OCCUPATIONS = ['Accountant', 'Architect', 'Developer', 'Doctor', 'Engineer', 'Entrepreneur',
-               'Journalist', 'Lawyer', 'Manager', 'Mechanic', 'Media_Manager', 'Musician',
-               'Scientist', 'Teacher', 'Writer']
-CREDIT_MIX = ['Bad', 'Standard', 'Good']
-PAY_MIN_AMOUNT = ['Yes', 'No', 'NM']
-PAY_BEHAVIOUR = ['Low_spent_Small_value_payments', 'Low_spent_Medium_value_payments',
-                  'Low_spent_Large_value_payments', 'High_spent_Small_value_payments',
-                  'High_spent_Medium_value_payments', 'High_spent_Large_value_payments']
+# Known categories seen during EDA (used to populate dropdowns).
+CATEGORY_OPTIONS = {
+    "Occupation": [
+        "Developer", "Musician", "Scientist", "Entrepreneur", "Accountant",
+        "Journalist", "Media_Manager", "Mechanic", "Writer", "Doctor",
+        "Teacher", "Lawyer", "Engineer", "Architect",
+    ],
+    "Credit_Mix": ["Good", "Standard", "Bad"],
+    "Payment_of_Min_Amount": ["Yes", "No", "NM"],
+    "Payment_Behaviour": [
+        "High_spent_Large_value_payments", "High_spent_Medium_value_payments",
+        "High_spent_Small_value_payments", "Low_spent_Large_value_payments",
+        "Low_spent_Medium_value_payments", "Low_spent_Small_value_payments",
+    ],
+}
 
-LABEL_COLOR = {"Good": "🟢", "Standard": "🟡", "Poor": "🔴"}
+NUMERIC_DEFAULTS = {
+    "Age": 35, "Annual_Income": 50000.0, "Monthly_Inhand_Salary": 4000.0,
+    "Num_Bank_Accounts": 3, "Num_Credit_Card": 4, "Interest_Rate": 12,
+    "Num_of_Loan": 2, "Delay_from_due_date": 10, "Num_of_Delayed_Payment": 5,
+    "Changed_Credit_Limit": 5.0, "Num_Credit_Inquiries": 3, "Outstanding_Debt": 1000.0,
+    "Credit_Utilization_Ratio": 30.0, "Total_EMI_per_month": 100.0,
+    "Amount_invested_monthly": 100.0, "Monthly_Balance": 300.0,
+    "Credit_History_Age_Months": 120, "Num_Loan_Types": 2,
+}
 
-st.title("💳 Credit Score Predictor")
-st.caption("Deployment model klasifikasi Credit_Score (Good / Standard / Poor) — bagian 1c")
+st.title("💳 Credit Score Prediction")
+st.caption("DTSC6012001 - Model Deployment | Dataset A | Model deployment demo")
 
-st.subheader("Masukkan Data Nasabah")
+st.markdown("Isi data nasabah di bawah, lalu klik **Predict** untuk melihat hasil klasifikasi Credit Score.")
 
-with st.form("manual_form"):
-    c1, c2 = st.columns(2)
+with st.form("input_form"):
+    st.subheader("Data Numerik")
+    num_col1, num_col2 = st.columns(2)
+    numeric_inputs = {}
+    for i, col in enumerate(NUMERIC_COLS):
+        target_col = num_col1 if i % 2 == 0 else num_col2
+        default = NUMERIC_DEFAULTS.get(col, 0.0)
+        numeric_inputs[col] = target_col.number_input(
+            col.replace("_", " "), value=float(default), step=1.0, format="%.2f"
+        )
 
-    with c1:
-        age = st.number_input("Age", min_value=14, max_value=100, value=30)
-        annual_income = st.number_input("Annual Income", min_value=0.0, value=45000.0, step=1000.0)
-        monthly_salary = st.number_input("Monthly Inhand Salary", min_value=0.0, value=3500.0, step=100.0)
-        num_bank_accounts = st.number_input("Num Bank Accounts", min_value=0, max_value=20, value=3)
-        num_credit_card = st.number_input("Num Credit Card", min_value=0, value=4)
-        interest_rate = st.number_input("Interest Rate (%)", min_value=0.0, max_value=40.0, value=12.0)
-        num_loan = st.number_input("Num of Loan", min_value=0, max_value=20, value=2)
-        delay_due = st.number_input("Delay from Due Date (hari)", min_value=0, value=5)
-        num_delayed = st.number_input("Num of Delayed Payment", min_value=0, max_value=40, value=3)
-        changed_limit = st.number_input("Changed Credit Limit", value=2.5, step=0.1)
+    st.subheader("Data Kategorikal")
+    cat_col1, cat_col2 = st.columns(2)
+    categorical_inputs = {}
+    for i, col in enumerate(CATEGORICAL_COLS):
+        target_col = cat_col1 if i % 2 == 0 else cat_col2
+        options = CATEGORY_OPTIONS.get(col, [""])
+        categorical_inputs[col] = target_col.selectbox(col.replace("_", " "), options)
 
-    with c2:
-        num_inquiries = st.number_input("Num Credit Inquiries", min_value=0, value=4)
-        outstanding_debt = st.number_input("Outstanding Debt", min_value=0.0, value=1200.0, step=100.0)
-        credit_util = st.number_input("Credit Utilization Ratio (%)", min_value=0.0, max_value=100.0, value=32.5)
-        emi = st.number_input("Total EMI per Month", min_value=0.0, value=150.0, step=10.0)
-        invested = st.number_input("Amount Invested Monthly", min_value=0.0, value=200.0, step=10.0)
-        monthly_balance = st.number_input("Monthly Balance", min_value=0.0, value=400.0, step=10.0)
-        credit_history_months = st.number_input("Credit History Age (bulan)", min_value=0, value=120)
-        num_loan_types = st.number_input("Num Loan Types", min_value=0, value=2)
-        occupation = st.selectbox("Occupation", OCCUPATIONS, index=OCCUPATIONS.index("Engineer"))
-        credit_mix = st.selectbox("Credit Mix", CREDIT_MIX, index=CREDIT_MIX.index("Good"))
+    submitted = st.form_submit_button("🔍 Predict", use_container_width=True)
 
-    c3, c4 = st.columns(2)
-    with c3:
-        pay_min_amount = st.selectbox("Payment of Min Amount", PAY_MIN_AMOUNT, index=1)
-    with c4:
-        pay_behaviour = st.selectbox("Payment Behaviour", PAY_BEHAVIOUR, index=4)
-
-    submitted = st.form_submit_button("🔮 Prediksi Credit Score", use_container_width=True)
 
 if submitted:
-    input_data = {
-        "Age": age, "Annual_Income": annual_income, "Monthly_Inhand_Salary": monthly_salary,
-        "Num_Bank_Accounts": num_bank_accounts, "Num_Credit_Card": num_credit_card,
-        "Interest_Rate": interest_rate, "Num_of_Loan": num_loan,
-        "Delay_from_due_date": delay_due, "Num_of_Delayed_Payment": num_delayed,
-        "Changed_Credit_Limit": changed_limit, "Num_Credit_Inquiries": num_inquiries,
-        "Outstanding_Debt": outstanding_debt, "Credit_Utilization_Ratio": credit_util,
-        "Total_EMI_per_month": emi, "Amount_invested_monthly": invested,
-        "Monthly_Balance": monthly_balance, "Credit_History_Age_Months": credit_history_months,
-        "Num_Loan_Types": num_loan_types, "Occupation": occupation, "Credit_Mix": credit_mix,
-        "Payment_of_Min_Amount": pay_min_amount, "Payment_Behaviour": pay_behaviour,
-    }
+    row = {**numeric_inputs, **categorical_inputs}
+    X_input = pd.DataFrame([row])[NUMERIC_COLS + CATEGORICAL_COLS]
 
-    try:
-        result = predictor.predict(input_data)
-        label = result["prediction"]
-        st.success(f"### {LABEL_COLOR.get(label, '')} Prediksi: **{label}**")
+    X_proc = preprocessor.transform(X_input)
+    if hasattr(X_proc, "toarray"):
+        X_proc = X_proc.toarray()
 
-        if "probabilities" in result:
-            st.write("**Probabilitas tiap kelas:**")
-            proba_df = pd.DataFrame(
-                result["probabilities"].items(), columns=["Kelas", "Probabilitas"]
-            )
-            st.bar_chart(proba_df.set_index("Kelas"))
-    except Exception as e:
-        st.error(f"Terjadi kesalahan saat prediksi: {e}")
+    pred_encoded = model.predict(X_proc)[0]
+    pred_label = label_encoder.inverse_transform([pred_encoded])[0]
+
+    proba = None
+    if hasattr(model, "predict_proba"):
+        proba = model.predict_proba(X_proc)[0]
+
+    st.divider()
+    color = {"Good": "green", "Standard": "orange", "Poor": "red"}.get(pred_label, "blue")
+    st.markdown(f"### Hasil Prediksi: :{color}[**{pred_label}**]")
+
+    if proba is not None:
+        proba_df = pd.DataFrame({
+            "Credit_Score": label_encoder.classes_,
+            "Probability": proba,
+        }).sort_values("Probability", ascending=False).reset_index(drop=True)
+        st.bar_chart(proba_df.set_index("Credit_Score"))
+        st.dataframe(proba_df, hide_index=True, use_container_width=True)
+
+    with st.expander("Lihat input yang dikirim ke model"):
+        st.dataframe(X_input, use_container_width=True)
 
 st.divider()
-st.caption("Model: RandomForestClassifier · Artefak: credit_score_model.pkl, preprocessor.pkl, label_encoder.pkl, feature_schema.pkl")
+st.caption("Model: best model dari pipeline.py (dipilih otomatis berdasarkan F1-macro tertinggi via MLflow).")
